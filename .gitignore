@@ -1,0 +1,19 @@
+node_modules/
+.data/
+.env
+npm-debug.log*
+
+# Python runtime and generated caches
+__pycache__/
+*.py[cod]
+.Python
+venv/
+env/
+.venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
