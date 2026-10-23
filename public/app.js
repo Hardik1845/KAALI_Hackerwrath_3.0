@@ -748,6 +748,118 @@ function validateDeepfakeImage(file, maxMB = 15) {
   if (file.size > maxMB * 1024 * 1024) throw new Error(`Choose an image smaller than ${maxMB} MB.`);
 }
 
+function formatForensicScore(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toFixed(1)}%` : 'Not available';
+}
+
+function addScoreBar(parent, label, value, description, tone = '') {
+  const score = Number(value);
+  const row = document.createElement('div'); row.className = `forensic-score ${tone}`;
+  const head = document.createElement('div'); head.className = 'forensic-score-head';
+  const name = document.createElement('b'); name.textContent = label;
+  const amount = document.createElement('strong'); amount.textContent = formatForensicScore(value);
+  head.append(name, amount);
+  const track = document.createElement('div'); track.className = 'forensic-score-track'; track.setAttribute('role', 'img'); track.setAttribute('aria-label', `${label}: ${formatForensicScore(value)}`);
+  const fill = document.createElement('span'); fill.style.width = `${Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0}%`; track.append(fill);
+  const note = document.createElement('small'); note.textContent = description;
+  row.append(head, track, note); parent.append(row);
+}
+
+async function renderDeepfakeReport(output, file) {
+  const resultBox = $('#deepfake-result'); resultBox.replaceChildren();
+  let sha256 = 'unavailable';
+  try {
+    const bytes = await file.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    sha256 = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+  } catch { /* Keep the analysis usable if the browser does not provide Web Crypto. */ }
+  const panel = document.createElement('section'); panel.className = 'forensic-report';
+  const header = document.createElement('div'); header.className = 'forensic-report-head';
+  const eyebrow = document.createElement('span'); eyebrow.textContent = 'DEEPDEFEND ANALYSIS';
+  const hash = document.createElement('code'); hash.textContent = `SHA-256 · ${sha256.slice(0, 12)}…${sha256.slice(-8)}`; hash.title = sha256;
+  header.append(eyebrow, hash); panel.append(header);
+
+  const score = Number(output.manipulation_score ?? output.manipulation_probability * 100);
+  const verdict = document.createElement('div');
+  verdict.className = `forensic-verdict ${score >= 55 ? 'concern' : 'clear'}`;
+  const verdictCopy = document.createElement('div');
+  const verdictLabel = document.createElement('small'); verdictLabel.textContent = 'CLASSIFICATION';
+  const verdictName = document.createElement('b'); verdictName.textContent = String(output.verdict || 'ANALYSIS_COMPLETE').replaceAll('_', ' ');
+  const type = document.createElement('span'); type.textContent = output.manipulation_type ? `Type: ${output.manipulation_type}` : 'Type: unavailable';
+  verdictCopy.append(verdictLabel, verdictName, type); verdict.append(verdictCopy); panel.append(verdict);
+
+  const summary = document.createElement('div'); summary.className = 'forensic-summary';
+  const manipulation = document.createElement('article'); manipulation.className = 'forensic-metric';
+  const manipulationLabel = document.createElement('small'); manipulationLabel.textContent = 'MANIPULATION SIGNAL';
+  const manipulationValue = document.createElement('b'); manipulationValue.textContent = formatForensicScore(output.manipulation_probability == null ? score : Number(output.manipulation_probability) * 100);
+  manipulation.append(manipulationLabel, manipulationValue);
+  const authenticity = document.createElement('article'); authenticity.className = 'forensic-metric';
+  const authenticityLabel = document.createElement('small'); authenticityLabel.textContent = 'AUTHENTICITY SIGNAL';
+  const authenticityValue = document.createElement('b'); authenticityValue.textContent = formatForensicScore(output.authenticity_score);
+  authenticity.append(authenticityLabel, authenticityValue); summary.append(manipulation, authenticity); panel.append(summary);
+
+  const streams = document.createElement('section'); streams.className = 'forensic-section';
+  const streamsTitle = document.createElement('h3'); streamsTitle.textContent = 'Model stream breakdown'; streams.append(streamsTitle);
+  addScoreBar(streams, 'MesoNet-4 spatial CNN', output.spatial_score, 'Spatial artifact and blending signal.', 'spatial');
+  addScoreBar(streams, '2D DCT spectral frequency', output.frequency_score, 'Frequency-domain anomaly signal.', 'frequency');
+  addScoreBar(streams, 'JPEG ELA', output.ela_score, 'Compression residual signal.', 'ela');
+  panel.append(streams);
+
+  const faces = Array.isArray(output.faces_details) ? output.faces_details : [];
+  const faceSection = document.createElement('section'); faceSection.className = 'forensic-face-section';
+  const faceHeading = document.createElement('h3'); faceHeading.textContent = `Multi-face scan · ${Number(output.faces_detected) || 0} detected`;
+  faceSection.append(faceHeading);
+  if (faces.length) {
+    const list = document.createElement('div'); list.className = 'forensic-face-list';
+    for (const [facePosition, face] of faces.entries()) {
+      const item = document.createElement('article'); item.className = 'forensic-face';
+      const title = document.createElement('b'); title.textContent = `Face ${face.face_index ?? '—'}${facePosition === 0 ? ' · highest signal' : ''}`;
+      const faceScore = document.createElement('strong'); faceScore.textContent = `${formatForensicScore(face.manipulation_score)} signal`;
+      const position = document.createElement('small'); position.textContent = Array.isArray(face.box) ? `Image region: x ${face.box[0]}, y ${face.box[1]}, w ${face.box[2]}, h ${face.box[3]}` : 'Image region unavailable';
+      const detail = document.createElement('small'); detail.textContent = `Spatial ${formatForensicScore(face.spatial_score)} · Spectral ${formatForensicScore(face.frequency_score)} · ELA ${formatForensicScore(face.ela_score)}`;
+      item.append(title, faceScore, position, detail); list.append(item);
+    }
+    faceSection.append(list);
+  } else {
+    const noFace = document.createElement('p'); noFace.textContent = 'No face-level breakdown was returned. The engine may have analyzed the full image instead.'; faceSection.append(noFace);
+  }
+  panel.append(faceSection);
+
+  const diagnostic = document.createElement('section'); diagnostic.className = 'forensic-note';
+  const diagnosticTitle = document.createElement('b'); diagnosticTitle.textContent = 'Diagnostic forensic note';
+  const diagnosticText = document.createElement('p'); diagnosticText.textContent = output.forensic_notes || 'No diagnostic note was returned.';
+  const scope = document.createElement('small'); scope.textContent = output.analysis_scope || 'Analysis scope: detected faces, with full-image fallback when no face is detected.';
+  diagnostic.append(diagnosticTitle, diagnosticText, scope); panel.append(diagnostic);
+
+  if (output.heatmap_base64) {
+    const heatmapTitle = document.createElement('h3'); heatmapTitle.className = 'forensic-heatmap-title'; heatmapTitle.textContent = 'Spatial artifact heatmap'; panel.append(heatmapTitle);
+    const heatmap = document.createElement('img'); heatmap.src = output.heatmap_base64; heatmap.alt = 'DeepDefend spatial artifact heatmap'; heatmap.className = 'deepfake-heatmap'; panel.append(heatmap);
+  }
+  const disclaimer = document.createElement('p'); disclaimer.className = 'forensic-disclaimer';
+  disclaimer.textContent = output.score_notice || 'Scores are uncalibrated analysis signals, not proof of authenticity or manipulation.'; panel.append(disclaimer);
+
+  const actions = document.createElement('div'); actions.className = 'forensic-actions';
+  const exportButton = document.createElement('button'); exportButton.type = 'button'; exportButton.className = 'secondary-button'; exportButton.textContent = 'Export analysis report';
+  exportButton.addEventListener('click', () => {
+    const { heatmap_base64, ...report } = output;
+    const blob = new Blob([JSON.stringify({ generated_at: new Date().toISOString(), file_name: file.name, sha256, ...report }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'kaali-deepdefend-report.json'; link.click(); URL.revokeObjectURL(url);
+  });
+  const resetButton = document.createElement('button'); resetButton.type = 'button'; resetButton.className = 'text-button forensic-reset'; resetButton.textContent = 'Reset';
+  resetButton.addEventListener('click', resetDeepfakeAnalysis); actions.append(exportButton, resetButton); panel.append(actions);
+  resultBox.append(panel);
+}
+
+function resetDeepfakeAnalysis() {
+  state.deepfakeFile = null;
+  $('#deepfake-file').value = '';
+  $('#deepfake-preview').removeAttribute('src'); $('#deepfake-preview').hidden = true;
+  $('.drop-content', $('#deepfake-drop')).hidden = false;
+  $('#deepfake-result').replaceChildren(); $('#deepfake-result').hidden = true;
+  $('#deepfake-run').disabled = true;
+}
+
 async function analyzeDeepfake() {
   if (!state.deepfakeFile) return;
   const progress = $('#model-progress'), status = $('#model-status'), resultBox = $('#deepfake-result'), button = $('#deepfake-run');
@@ -762,14 +874,7 @@ async function analyzeDeepfake() {
     const response = await fetch('/api/deepfake', { method: 'POST', body: form });
     const output = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(output.error || 'Deepfake analysis failed.');
-    const titleText = ({ AUTHENTIC: 'Fewer manipulation artifacts detected', SUSPICIOUS: 'Some manipulation artifacts detected', LIKELY_DEEPFAKE: 'Elevated manipulation artifacts detected', CONFIRMED_DEEPFAKE: 'Strong manipulation artifacts detected' })[output.verdict] || 'Analysis complete';
-    resultBox.className = `analysis-result ${output.verdict === 'AUTHENTIC' ? '' : 'result-warn'}`; resultBox.replaceChildren();
-    const title = document.createElement('b'); title.textContent = titleText;
-    const summary = document.createElement('small'); summary.textContent = `${output.verdict || 'Unknown'} · artifact score ${output.manipulation_score ?? '—'}/100 · ${output.faces_detected ?? 0} face(s) detected`;
-    const streams = document.createElement('small'); streams.textContent = `MesoNet spatial ${output.spatial_score ?? '—'} · DCT frequency ${output.frequency_score ?? '—'} · ELA ${output.ela_score ?? '—'} (scores are uncalibrated signals)`;
-    const notes = document.createElement('small'); notes.textContent = `${output.forensic_notes || ''} ${output.faces_detected === 0 ? 'No face was detected; the engine analyzed the full image, so facial conclusions are limited.' : ''} ${output.score_notice || 'This result is not proof of authenticity or manipulation.'}`;
-    resultBox.append(title, summary, streams, notes);
-    if (output.heatmap_base64) { const heatmap = document.createElement('img'); heatmap.src = output.heatmap_base64; heatmap.alt = 'Visualization of image analysis artifacts'; heatmap.className = 'deepfake-heatmap'; resultBox.append(heatmap); }
+    await renderDeepfakeReport(output, state.deepfakeFile);
     resultBox.hidden = false;
   } catch (error) {
     toast(`DeepDefend could not run: ${error.message}`, 'error');
