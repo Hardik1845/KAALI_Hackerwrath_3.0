@@ -1,0 +1,1514 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hash Shield Microservice \u2014 Project KAALI",
+    "description": "Zero-knowledge privacy-preserving evidence collection, perceptual hashing, reverse web discovery, host RDAP lookup, and statutory 24-hour takedown engine for Project KAALI.",
+    "version": "1.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Health Check",
+        "description": "Liveness probe returning service operational status.",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/scan": {
+      "post": {
+        "tags": [
+          "Discovery & Scanning"
+        ],
+        "summary": "Scan Image",
+        "description": "Step 1: Upload original photo or public image URL \u2192 compute in-memory perceptual hashes \u2192 run web discovery.\nHARD RULES:\n1. Consent is required.\n2. If is_minor=True: Immediately halt and provide statutory child protection links (1098 / cybercrime.gov.in).\n3. If intimate=True: Do NOT scan third-party web engines. Return StopNCII instructions and allow manual URLs.\n4. If intimate=False: Run discovery provider, safely verify up to 20 candidates, and rank them.\n5. Image bytes are never stored on disk.",
+        "operationId": "scan_image_v1_scan_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_scan_image_v1_scan_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/hash": {
+      "post": {
+        "tags": [
+          "Hashing"
+        ],
+        "summary": "Hash Image",
+        "description": "Process an uploaded image entirely in memory.\nInspects magic bytes, computes pHash, dHash, SHA-256 and dimensions, then discards image bytes.\nNever stores image bytes on disk.",
+        "operationId": "hash_image_v1_hash_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_hash_image_v1_hash_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HashResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/vault": {
+      "post": {
+        "tags": [
+          "Vault"
+        ],
+        "summary": "Register Vault Hash",
+        "description": "Register an authentic reference photo's perceptual fingerprints in a victim's private vault.\nStores only hashes, timestamp, and optional user label.",
+        "operationId": "register_vault_hash_v1_vault_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultRegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/match": {
+      "post": {
+        "tags": [
+          "Matching"
+        ],
+        "summary": "Match Hash",
+        "description": "Compare a suspect image (or provided hash) against all registered hashes in the user's vault.\nStrictly compares hashes from the same algorithm using Hamming distance.\nThreshold default: 10 bits.",
+        "operationId": "match_hash_v1_match_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_match_hash_v1_match_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MatchResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/cases": {
+      "post": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Create Case",
+        "description": "Initialize an evidence recovery and takedown case.\nAccepts either:\n1. Legacy CaseCreateRequest ({user_id, urls[], evidence_hashes[], notes, is_minor})\n2. CaseCreateFromCandidatesRequest ({user_id, original_id, candidate_ids[], manual_urls[], notes, is_minor})\nStrict under-18 safety check: Immediately rejects if minor involvement is flagged.",
+        "operationId": "create_case_v1_cases_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseDetailResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/cases/{case_id}/lookup": {
+      "post": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Lookup Case Hosts",
+        "description": "Performs SSRF-safe RDAP and DNS lookup for each URL in the case.\nIdentifies domain registrar, hosting provider, and abuse desk contact emails.\nIf behind Cloudflare, returns its abuse form link (https://abuse.cloudflare.com).",
+        "operationId": "lookup_case_hosts_v1_cases__case_id__lookup_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/cases/{case_id}/notices": {
+      "post": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Generate Case Notices",
+        "description": "Compiles statutory plain-text notice templates and generates an evidence PDF document.\nIncludes visible '[TODO: verify legal wording]' marker and references Rule 3(2)(b) IT Rules 2021.",
+        "operationId": "generate_case_notices_v1_cases__case_id__notices_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseNoticeResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/cases/{case_id}/sent": {
+      "post": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Mark Case Sent",
+        "description": "Victim marks that she has dispatched the statutory notice herself.\nSets due_at deadline and starts the statutory SLA timer (default: 24 hours).",
+        "operationId": "mark_case_sent_v1_cases__case_id__sent_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseSentResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/cases/{case_id}/check": {
+      "post": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Check Case Removal Status",
+        "description": "Probes each URL in the case using non-destructive HEAD/GET requests with discarded bodies.\nDetects HTTP 404/410 (likely removed) vs HTTP 200/403 (inconclusive).\nNever trusts alone; user must verify before closure.",
+        "operationId": "check_case_removal_status_v1_cases__case_id__check_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/cases/{case_id}": {
+      "get": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Get Case Status",
+        "description": "Retrieve full case details, evidence index, and remaining SLA timer countdown evaluated from due_at on read.",
+        "operationId": "get_case_status_v1_cases__case_id__get",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/jobs/due": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Get Due Jobs",
+        "description": "Endpoint for external cron jobs to inspect cases where the statutory 24-hour SLA has expired.",
+        "operationId": "get_due_jobs_v1_jobs_due_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DueJobsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ]
+      }
+    },
+    "/v1/cases/{case_id}/resolve": {
+      "post": {
+        "tags": [
+          "Cases"
+        ],
+        "summary": "Resolve Case",
+        "description": "Resolve the case based on whether infringing material was removed within SLA.\nIf removed: Closes case and preserves evidence log.\nIf not removed: Sets status to 'escalated' and returns complete escalation packet\n(cybercrime.gov.in, helpline 1930, and StopNCII hand-off).",
+        "operationId": "resolve_case_v1_cases__case_id__resolve_post",
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "case_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Case Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CaseResolveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CaseResolveResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Body_hash_image_v1_hash_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_hash_image_v1_hash_post"
+      },
+      "Body_match_hash_v1_match_post": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "hash_value": {
+            "type": "string",
+            "title": "Hash Value"
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm",
+            "default": "phash"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "title": "Body_match_hash_v1_match_post"
+      },
+      "Body_scan_image_v1_scan_post": {
+        "properties": {
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "binary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url",
+            "description": "Public image URL to reverse search (recommended for SerpApi Google Lens)"
+          },
+          "consent": {
+            "type": "boolean",
+            "title": "Consent",
+            "description": "Explicit user consent to scan the web",
+            "default": true
+          },
+          "intimate": {
+            "type": "boolean",
+            "title": "Intimate",
+            "description": "Whether the original is an intimate/explicit image",
+            "default": false
+          },
+          "is_minor": {
+            "type": "boolean",
+            "title": "Is Minor",
+            "description": "Whether the original involves a person under 18",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "Body_scan_image_v1_scan_post"
+      },
+      "CandidateMatchItem": {
+        "properties": {
+          "candidate_id": {
+            "type": "string",
+            "title": "Candidate Id"
+          },
+          "page_url": {
+            "type": "string",
+            "title": "Page Url"
+          },
+          "image_url": {
+            "type": "string",
+            "title": "Image Url"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "match_type": {
+            "type": "string",
+            "title": "Match Type",
+            "default": "full"
+          },
+          "verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verified"
+          },
+          "distance": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Distance"
+          },
+          "similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Similarity",
+            "description": "Neural SSCD cosine similarity in range [-1.0, 1.0]"
+          },
+          "sscd_verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sscd Verified",
+            "description": "True if SSCD similarity >= threshold"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "candidate_id",
+          "page_url",
+          "image_url",
+          "domain"
+        ],
+        "title": "CandidateMatchItem",
+        "description": "A discovery candidate scraped/detected from reverse image search."
+      },
+      "CaseCheckResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/CaseCheckResultItem"
+            },
+            "type": "array",
+            "title": "Results"
+          },
+          "advice": {
+            "type": "string",
+            "title": "Advice",
+            "default": "Automated probes (404/410) are indicative; user confirmation is required before closing case."
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "results"
+        ],
+        "title": "CaseCheckResponse",
+        "description": "Response from live URL status probe."
+      },
+      "CaseCheckResultItem": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          },
+          "removed_assessment": {
+            "type": "string",
+            "title": "Removed Assessment"
+          },
+          "checked_at": {
+            "type": "string",
+            "title": "Checked At"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "removed_assessment",
+          "checked_at",
+          "note"
+        ],
+        "title": "CaseCheckResultItem",
+        "description": "HTTP status check for a target URL."
+      },
+      "CaseDetailResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Urls"
+          },
+          "evidence_hashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence Hashes"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "lookups": {
+            "items": {
+              "$ref": "#/components/schemas/LookupResultItem"
+            },
+            "type": "array",
+            "title": "Lookups",
+            "default": []
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "deadline": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline"
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Due At"
+          },
+          "seconds_remaining": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seconds Remaining"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "user_id",
+          "status",
+          "urls",
+          "evidence_hashes",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CaseDetailResponse",
+        "description": "Complete case representation."
+      },
+      "CaseNoticeResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "notices": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Notices"
+          },
+          "pdf_base64": {
+            "type": "string",
+            "title": "Pdf Base64"
+          },
+          "evidence_sha256": {
+            "type": "string",
+            "title": "Evidence Sha256"
+          },
+          "todo_marker": {
+            "type": "string",
+            "title": "Todo Marker",
+            "default": "TODO: verify legal wording"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "notices",
+          "pdf_base64",
+          "evidence_sha256"
+        ],
+        "title": "CaseNoticeResponse",
+        "description": "Notice generation response with text templates and PDF bytes."
+      },
+      "CaseResolveRequest": {
+        "properties": {
+          "removed": {
+            "type": "boolean",
+            "title": "Removed",
+            "description": "True if content removed, False if content remains"
+          }
+        },
+        "type": "object",
+        "required": [
+          "removed"
+        ],
+        "title": "CaseResolveRequest",
+        "description": "Case resolution request."
+      },
+      "CaseResolveResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "resolved_at": {
+            "type": "string",
+            "title": "Resolved At"
+          },
+          "escalation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Escalation"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "status",
+          "resolved_at"
+        ],
+        "title": "CaseResolveResponse",
+        "description": "Case resolution response."
+      },
+      "CaseSentResponse": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "sent_at": {
+            "type": "string",
+            "title": "Sent At"
+          },
+          "sla_hours": {
+            "type": "integer",
+            "title": "Sla Hours"
+          },
+          "deadline": {
+            "type": "string",
+            "title": "Deadline"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "status",
+          "sent_at",
+          "sla_hours",
+          "deadline"
+        ],
+        "title": "CaseSentResponse",
+        "description": "Response when a user marks a takedown notice as dispatched."
+      },
+      "DueJobItem": {
+        "properties": {
+          "case_id": {
+            "type": "string",
+            "title": "Case Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "due_at": {
+            "type": "string",
+            "title": "Due At"
+          },
+          "overdue_seconds": {
+            "type": "number",
+            "title": "Overdue Seconds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "case_id",
+          "user_id",
+          "due_at",
+          "overdue_seconds"
+        ],
+        "title": "DueJobItem",
+        "description": "Case where 24-hour SLA remediation deadline has expired."
+      },
+      "DueJobsResponse": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "jobs": {
+            "items": {
+              "$ref": "#/components/schemas/DueJobItem"
+            },
+            "type": "array",
+            "title": "Jobs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "jobs"
+        ],
+        "title": "DueJobsResponse",
+        "description": "Response for cron jobs checking expired cases."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HashResponse": {
+        "properties": {
+          "phash": {
+            "type": "string",
+            "title": "Phash",
+            "description": "256-bit or 64-bit hexadecimal pHash"
+          },
+          "dhash": {
+            "type": "string",
+            "title": "Dhash",
+            "description": "64-bit hexadecimal dHash"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256",
+            "description": "Cryptographic SHA-256 digest"
+          },
+          "width": {
+            "type": "integer",
+            "title": "Width",
+            "description": "Image width in pixels"
+          },
+          "height": {
+            "type": "integer",
+            "title": "Height",
+            "description": "Image height in pixels"
+          }
+        },
+        "type": "object",
+        "required": [
+          "phash",
+          "dhash",
+          "sha256",
+          "width",
+          "height"
+        ],
+        "title": "HashResponse",
+        "description": "Response returned after computing perceptual and cryptographic hashes."
+      },
+      "LookupResultItem": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "domain": {
+            "type": "string",
+            "title": "Domain"
+          },
+          "registrar": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registrar"
+          },
+          "host": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host"
+          },
+          "abuse_emails": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Abuse Emails",
+            "default": []
+          },
+          "cloudflare_abuse_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cloudflare Abuse Url"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "found"
+          },
+          "error_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "domain"
+        ],
+        "title": "LookupResultItem",
+        "description": "RDAP / DNS lookup result for an individual URL."
+      },
+      "MatchResponse": {
+        "properties": {
+          "matches": {
+            "items": {
+              "$ref": "#/components/schemas/MatchResultItem"
+            },
+            "type": "array",
+            "title": "Matches"
+          },
+          "threshold": {
+            "type": "integer",
+            "title": "Threshold"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": "Perceptual hashes can be evaded by heavy edits; absence of a match is not proof."
+          }
+        },
+        "type": "object",
+        "required": [
+          "matches",
+          "threshold"
+        ],
+        "title": "MatchResponse",
+        "description": "Match response payload."
+      },
+      "MatchResultItem": {
+        "properties": {
+          "vault_id": {
+            "type": "string",
+            "title": "Vault Id"
+          },
+          "algorithm": {
+            "type": "string",
+            "title": "Algorithm"
+          },
+          "distance": {
+            "type": "integer",
+            "title": "Distance"
+          },
+          "is_match": {
+            "type": "boolean",
+            "title": "Is Match"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vault_id",
+          "algorithm",
+          "distance",
+          "is_match"
+        ],
+        "title": "MatchResultItem",
+        "description": "Individual match entry against a vault item."
+      },
+      "ScanResponse": {
+        "properties": {
+          "original_id": {
+            "type": "string",
+            "title": "Original Id"
+          },
+          "phash": {
+            "type": "string",
+            "title": "Phash"
+          },
+          "dhash": {
+            "type": "string",
+            "title": "Dhash"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "intimate": {
+            "type": "boolean",
+            "title": "Intimate"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMatchItem"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "stop_ncii": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stop Ncii"
+          },
+          "daily_scans_remaining": {
+            "type": "integer",
+            "title": "Daily Scans Remaining"
+          },
+          "sscd_embedding": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sscd Embedding",
+            "description": "576-dim L2-normalized SSCD vector"
+          }
+        },
+        "type": "object",
+        "required": [
+          "original_id",
+          "phash",
+          "dhash",
+          "sha256",
+          "intimate",
+          "candidates",
+          "daily_scans_remaining"
+        ],
+        "title": "ScanResponse",
+        "description": "Response returned from POST /v1/scan."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "VaultItem": {
+        "properties": {
+          "vault_id": {
+            "type": "string",
+            "title": "Vault Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "phash": {
+            "type": "string",
+            "title": "Phash"
+          },
+          "dhash": {
+            "type": "string",
+            "title": "Dhash"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "vault_id",
+          "user_id",
+          "phash",
+          "dhash",
+          "sha256",
+          "created_at"
+        ],
+        "title": "VaultItem",
+        "description": "Stored vault entry representing a protected image fingerprint."
+      },
+      "VaultRegisterRequest": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "title": "User Id",
+            "description": "Unique victim or client identifier"
+          },
+          "phash": {
+            "type": "string",
+            "title": "Phash",
+            "description": "pHash string"
+          },
+          "dhash": {
+            "type": "string",
+            "title": "Dhash",
+            "description": "dHash string"
+          },
+          "sha256": {
+            "type": "string",
+            "title": "Sha256",
+            "description": "Cryptographic SHA-256 fingerprint"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label",
+            "description": "Optional label for the vault entry"
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "phash",
+          "dhash",
+          "sha256"
+        ],
+        "title": "VaultRegisterRequest",
+        "description": "Request to register a victim's authentic reference photo hashes."
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "type": "apiKey",
+        "description": "Secret service API key for HashShield",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  }
+}

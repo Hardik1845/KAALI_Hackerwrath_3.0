@@ -1,0 +1,38 @@
+[TODO: verify legal wording]
+URGENT STATUTORY NOTICE UNDER RULE 3(2)(b) OF THE INFORMATION TECHNOLOGY 
+(INTERMEDIARY GUIDELINES AND DIGITAL MEDIA ETHICS CODE) RULES, 2021
+READ WITH SECTION 66E AND SECTION 67A OF THE INFORMATION TECHNOLOGY ACT, 2000
+
+Date: {{ date_str }}
+Case ID: {{ case_id }}
+To:
+Grievance Officer / Compliance Desk
+Target Platform / Domain: {{ domain }}
+
+Subject: Mandatory Takedown of Non-Consensual Intimate / Morphed Imagery within {{ sla_hours }} Hours
+
+Dear Grievance Officer,
+
+1. This is a formal statutory communication regarding non-consensual imagery violating the bodily privacy and dignity of an individual.
+
+2. INFRINGING MATERIAL IDENTIFIERS:
+   - Infringing URL(s):
+{% for url in urls %}
+     * {{ url }}
+{% endfor %}
+   - Cryptographic Evidence SHA-256 Digest: {{ evidence_sha256 }}
+   - Perceptual Image Fingerprints (pHash / dHash):
+{% for h in evidence_hashes %}
+     * {{ h }}
+{% endfor %}
+
+3. STATUTORY CITATIONS & MANDATE:
+   - Rule 3(2)(b) of the Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021 mandates intermediaries to disable access to or remove non-consensual intimate, sexually explicit, or morphed material WITHIN {{ sla_hours }} HOURS of receipt of complaint.
+   - Dissemination constitutes an offense under Section 66E (Violation of Bodily Privacy) and Section 67A (Sexually Explicit Acts) of the IT Act, 2000.
+   - [TODO: verify legal wording - ensure compliance with current state high court or central ministry amendments]
+
+4. DIRECTIVE:
+   You are formally notified to immediately take down, expunge, and disable all access to the above content within {{ sla_hours }} hours of this notice. Please preserve server access logs, IP logs, and uploader account identifiers for law enforcement authorities.
+
+Generated via Project KAALI — Hash Shield Evidence System
+Evidence Fingerprint: {{ evidence_sha256 }}

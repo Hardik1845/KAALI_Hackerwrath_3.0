@@ -23,11 +23,7 @@ db.exec(`
     is_demo INTEGER NOT NULL DEFAULT 0, reporter TEXT NOT NULL DEFAULT ''
   );
   CREATE INDEX IF NOT EXISTS reports_created ON reports(created_at);
-  CREATE TABLE IF NOT EXISTS image_hashes (
-    id TEXT PRIMARY KEY, hash TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL, UNIQUE(hash, url)
-  );
-  CREATE INDEX IF NOT EXISTS image_hashes_created ON image_hashes(created_at);
+
 `);
 const reportColumns = new Set(db.prepare('PRAGMA table_info(reports)').all().map(column => column.name));
 if (!reportColumns.has('is_demo')) db.exec('ALTER TABLE reports ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0');
@@ -39,8 +35,11 @@ const HOST = process.env.HOST || '127.0.0.1';
 const SOS_SERVICE_URL = String(process.env.SOS_SERVICE_URL || 'http://127.0.0.1:8001').replace(/\/$/, '');
 const SOS_SERVICE_API_KEY = String(process.env.SOS_SERVICE_API_KEY || '').trim();
 const DEEPFAKE_SERVICE_URL = String(process.env.DEEPFAKE_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+const HASH_SHIELD_SERVICE_URL = String(process.env.HASH_SHIELD_SERVICE_URL || 'http://127.0.0.1:8002').replace(/\/$/, '');
+const HASH_SHIELD_API_KEY = String(process.env.HASH_SHIELD_API_KEY || '').trim();
 const MAX_JSON = 1_200_000;
 const MAX_DEEPFAKE_UPLOAD = 15 * 1024 * 1024 + 1024 * 1024;
+const MAX_HASH_SHIELD_UPLOAD = 10 * 1024 * 1024;
 const categories = new Set(['harassment', 'following', 'poor_lighting', 'unsafe_path', 'help_available', 'other']);
 const demoReporters = new Set(Array.from({ length: 10 }, (_, index) => `Demo user ${String.fromCharCode(65 + index)}`));
 const seriousCategories = new Set(['harassment', 'following', 'unsafe_path']);
@@ -293,149 +292,70 @@ async function getModeTime(origin, destination, mode) {
   } catch { return { available: false, distanceKm: null, durationSeconds: null }; }
 }
 
-function isPrivateAddress(address) {
-  const ipVersion = isIP(address);
-  if (ipVersion === 4) {
-    const p = address.split('.').map(Number);
-    return p[0] === 0 || p[0] === 10 || p[0] === 127 || p[0] >= 224 ||
-      (p[0] === 100 && p[1] >= 64 && p[1] <= 127) || (p[0] === 169 && p[1] === 254) ||
-      (p[0] === 172 && p[1] >= 16 && p[1] <= 31) || (p[0] === 192 && (p[1] === 168 || p[1] === 0 || p[1] === 2)) ||
-      (p[0] === 198 && (p[1] === 18 || p[1] === 19 || p[1] === 51)) || (p[0] === 203 && p[1] === 0 && p[2] === 113);
-  }
-  if (ipVersion === 6) {
-    const normalized = address.toLowerCase();
-    if (normalized.startsWith('::ffff:')) {
-      const mapped = normalized.slice(7);
-      if (isIP(mapped) === 4) return isPrivateAddress(mapped);
-      const hex = mapped.split(':');
-      if (hex.length === 2 && hex.every(part => /^[0-9a-f]{1,4}$/.test(part))) {
-        const first = parseInt(hex[0], 16), second = parseInt(hex[1], 16);
-        return isPrivateAddress(`${first >> 8}.${first & 255}.${second >> 8}.${second & 255}`);
-      }
-    }
-    return normalized === '::' || normalized === '::1' || normalized.startsWith('fc') || normalized.startsWith('fd') ||
-      normalized.startsWith('fe8') || normalized.startsWith('fe9') || normalized.startsWith('fea') || normalized.startsWith('feb') ||
-      normalized.startsWith('ff');
-  }
-  return false;
-}
-
-async function publicUrl(raw) {
-  let parsed;
-  try { parsed = new URL(raw); } catch { throw Object.assign(new Error('Enter a valid public website URL.'), { status: 400 }); }
-  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !['', '80', '443'].includes(parsed.port)) {
-    throw Object.assign(new Error('Only public HTTP or HTTPS pages are supported.'), { status: 400 });
-  }
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal') || isPrivateAddress(host)) {
-    throw Object.assign(new Error('Private and local addresses cannot be scanned.'), { status: 400 });
-  }
-  if (!isIP(host)) {
-    let addresses;
-    try { addresses = await lookup(host, { all: true }); }
-    catch { throw Object.assign(new Error('This website could not be reached.'), { status: 400 }); }
-    if (!addresses.length || addresses.some(item => isPrivateAddress(item.address))) {
-      throw Object.assign(new Error('This website resolves to a private network and cannot be scanned.'), { status: 400 });
-    }
-  }
-  parsed.hash = '';
-  return parsed;
-}
-
-async function safeFetch(rawUrl, accept, maxBytes, maxRedirects = 2) {
-  let url = await publicUrl(rawUrl);
-  for (let hop = 0; hop <= maxRedirects; hop++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 10_000);
-    let response;
-    try {
-      response = await fetch(url, {
-        headers: { accept, 'user-agent': 'KaaliSafety/1.0 (user-directed image safety scan)' },
-        redirect: 'manual', signal: controller.signal
-      });
-    } catch (error) {
-      if (error.name === 'AbortError') throw Object.assign(new Error('The website took too long to respond.'), { status: 504 });
-      throw Object.assign(new Error('Could not fetch that public website. It may block automated requests.'), { status: 502 });
-    } finally { clearTimeout(timer); }
-    if ([301, 302, 303, 307, 308].includes(response.status)) {
-      const target = response.headers.get('location');
-      if (!target || hop === maxRedirects) throw Object.assign(new Error('This website redirects too many times.'), { status: 400 });
-      url = await publicUrl(new URL(target, url).href);
-      continue;
-    }
-    if (!response.ok) throw Object.assign(new Error(`The website responded with HTTP ${response.status}.`), { status: 502 });
-    const declared = Number(response.headers.get('content-length') || 0);
-    if (declared > maxBytes) throw Object.assign(new Error('This page or image is too large to scan.'), { status: 413 });
-    const reader = response.body?.getReader();
-    if (!reader) throw Object.assign(new Error('The website returned an empty response.'), { status: 502 });
-    const chunks = []; let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break;
-        size += value.byteLength;
-        if (size > maxBytes) { await reader.cancel(); throw Object.assign(new Error('This page or image is too large to scan.'), { status: 413 }); }
-        chunks.push(value);
-      }
-    } finally { reader.releaseLock(); }
-    return { response, bytes: Buffer.concat(chunks.map(chunk => Buffer.from(chunk))), url };
-  }
-  throw Object.assign(new Error('Could not reach that website.'), { status: 502 });
-}
-
-function decodeHtml(value) {
-  return value.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-}
-
-function extractPage(html, pageUrl) {
-  const assets = new Set();
-  const imageTags = html.match(/<img\b[^>]*>/gi) || [];
-  for (const tag of imageTags) {
-    const sources = [...tag.matchAll(/\b(?:src|data-src|data-lazy-src|srcset)\s*=\s*(["'])(.*?)\1/gi)];
-    for (const match of sources) {
-      for (const candidate of match[2].split(',')) {
-        const raw = candidate.trim().split(/\s+/)[0];
-        if (!raw || raw.startsWith('data:')) continue;
-        try { assets.add(new URL(decodeHtml(raw), pageUrl).href); } catch {}
-      }
-    }
-  }
-  for (const match of html.matchAll(/<meta\b[^>]*(?:property|name)\s*=\s*(["'])og:image\1[^>]*content\s*=\s*(["'])(.*?)\2[^>]*>/gi)) {
-    try { assets.add(new URL(decodeHtml(match[3]), pageUrl).href); } catch {}
-  }
-  const links = new Set();
-  for (const match of html.matchAll(/<a\b[^>]*href\s*=\s*(["'])(.*?)\1/gi)) {
-    try {
-      const next = new URL(decodeHtml(match[2]), pageUrl);
-      if (next.origin === new URL(pageUrl).origin && ['http:', 'https:'].includes(next.protocol)) { next.hash = ''; links.add(next.href); }
-    } catch {}
-  }
-  return { assets, links };
-}
-
-function parseRobots(text, pathname) {
-  let inGlobal = false, inOur = false, blocked = [];
-  for (const line of text.split(/\r?\n/)) {
-    const clean = line.split('#')[0].trim();
-    const separator = clean.indexOf(':'); if (separator < 0) continue;
-    const key = clean.slice(0, separator).trim().toLowerCase();
-    const value = clean.slice(separator + 1).trim();
-    if (key === 'user-agent') {
-      inOur = value.toLowerCase() === 'sahilisafety' || value === '*';
-      inGlobal = value === '*';
-    } else if (key === 'disallow' && (inOur || inGlobal) && value && pathname.startsWith(value)) blocked.push(value);
-  }
-  return blocked.length > 0;
-}
-
-async function robotsAllowed(url) {
-  try {
-    const robotsUrl = new URL('/robots.txt', url.origin);
-    const { bytes } = await safeFetch(robotsUrl.href, 'text/plain', 100_000, 0);
-    return !parseRobots(bytes.toString('utf8'), url.pathname);
-  } catch { return true; }
-}
-
 async function handleApi(req, res, url) {
+  if (url.pathname.startsWith('/api/hashshield/v1/')) {
+    const upstreamPath = `/v1/${url.pathname.slice('/api/hashshield/v1/'.length)}`;
+    const allowedPath = /^\/v1\/(?:scan|hash|vault|match|jobs\/due|cases(?:\/[A-Za-z0-9_-]+(?:\/(?:lookup|notices|sent|check|resolve))?)?)$/.test(upstreamPath);
+    if (!allowedPath || !['GET', 'POST'].includes(req.method)) return send(res, 404, { error: 'Hash Shield API route not found.' });
+    if (!HASH_SHIELD_API_KEY) return send(res, 503, { error: 'Hash Shield API key is not configured. Set HASH_SHIELD_API_KEY in the project .env file.' });
+    try {
+      let body;
+      const headers = { 'X-API-Key': HASH_SHIELD_API_KEY };
+      if (req.method === 'POST') {
+        const type = String(req.headers['content-type'] || '');
+        if (!type.toLowerCase().startsWith('application/json') && !type.toLowerCase().startsWith('multipart/form-data;')) return send(res, 415, { error: 'Hash Shield requests must use JSON or multipart form data.' });
+        headers['content-type'] = type;
+        body = await readBuffer(req, MAX_HASH_SHIELD_UPLOAD + 100_000);
+      }
+      const upstream = await fetch(`${HASH_SHIELD_SERVICE_URL}${upstreamPath}${url.search}`, {
+        method: req.method, headers, ...(body ? { body } : {}), signal: AbortSignal.timeout(120_000)
+      });
+      const result = await upstream.text();
+      return res.writeHead(upstream.status, {
+        'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
+        'cache-control': 'no-store', 'x-content-type-options': 'nosniff'
+      }).end(result);
+    } catch (error) {
+      const status = error.status || (error.name === 'TimeoutError' ? 504 : 503);
+      return send(res, status, { error: status === 504 ? 'Hash Shield request timed out.' : error.status ? error.message : 'Hash Shield is unavailable. Start it on port 8002.' });
+    }
+  }
+  if (req.method === 'GET' && url.pathname === '/api/hash/web-search/health') {
+    try {
+      const response = await fetch(`${HASH_SHIELD_SERVICE_URL}/health`, { signal: AbortSignal.timeout(2500) });
+      const service = await response.json();
+      return send(res, response.ok ? 200 : 503, { ...service, ok: response.ok });
+    } catch { return send(res, 503, { ok: false, error: 'Hash Shield is unavailable. Start it on port 8002.' }); }
+  }
+  if (req.method === 'POST' && url.pathname === '/api/hash/web-search') {
+    if (!HASH_SHIELD_API_KEY) return send(res, 503, { error: 'Hash Shield API key is not configured. Set HASH_SHIELD_API_KEY in the project .env file.' });
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(contentType)) return send(res, 415, { error: 'Choose a JPEG, PNG or WebP image for web search.' });
+    const isMinor = url.searchParams.get('is_minor') === 'true';
+    const intimate = url.searchParams.get('intimate') === 'true';
+    if (!intimate && url.searchParams.get('web_consent') !== 'true') return send(res, 400, { error: 'Confirm that you want this non-intimate image sent to the configured web search provider.' });
+    try {
+      const bytes = await readBuffer(req, MAX_HASH_SHIELD_UPLOAD);
+      if (!bytes.length) return send(res, 400, { error: 'The selected image is empty.' });
+      const rawName = String(req.headers['x-image-name'] || 'reference-image').slice(0, 180);
+      const filename = rawName.replace(/[\\/\r\n"\0]/g, '_') || 'reference-image';
+      const form = new FormData();
+      form.append('file', new Blob([bytes], { type: contentType }), filename);
+      form.append('consent', 'true');
+      form.append('intimate', String(intimate));
+      form.append('is_minor', String(isMinor));
+      const response = await fetch(`${HASH_SHIELD_SERVICE_URL}/v1/scan`, {
+        method: 'POST', headers: { 'X-API-Key': HASH_SHIELD_API_KEY }, body: form,
+        signal: AbortSignal.timeout(90_000)
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) return send(res, response.status, { error: result.detail || result.error || 'Hash Shield web search failed.' });
+      return send(res, 200, result);
+    } catch (error) {
+      const status = error.status || (error.name === 'TimeoutError' ? 504 : 503);
+      return send(res, status, { error: status === 504 ? 'Web image search timed out. Try again with a smaller image.' : error.status ? error.message : 'Hash Shield is unavailable. Start it on port 8002.' });
+    }
+  }
   if (req.method === 'GET' && url.pathname === '/api/deepfake/health') {
     try {
       const response = await fetch(`${DEEPFAKE_SERVICE_URL}/health`, { signal: AbortSignal.timeout(2500) });
@@ -620,77 +540,6 @@ async function handleApi(req, res, url) {
     } catch {
       return send(res, 503, { error: 'Kaali could not reach its SOS service. You can still use Copy SOS message or call local emergency services.' });
     }
-  }
-  if (req.method === 'POST' && url.pathname === '/api/hash/crawl') {
-    const body = await readJson(req, 8_000);
-    const start = await publicUrl(String(body.url || ''));
-    if (!await robotsAllowed(start)) return send(res, 403, { error: 'This site’s robots.txt disallows scanning this page.' });
-    const maxPages = 8, maxAssets = 60, visited = new Set(), pageQueue = [start.href], assets = new Map();
-    while (pageQueue.length && visited.size < maxPages && assets.size < maxAssets) {
-      const page = pageQueue.shift();
-      if (visited.has(page)) continue;
-      visited.add(page);
-      try {
-        const { bytes, response, url: finalUrl } = await safeFetch(page, 'text/html,application/xhtml+xml;q=0.9', 1_500_000);
-        const type = response.headers.get('content-type') || '';
-        if (!type.includes('html')) continue;
-        const { assets: images, links } = extractPage(bytes.toString('utf8'), finalUrl);
-        for (const source of images) {
-        if (assets.size >= maxAssets) break;
-          try {
-            const candidate = new URL(source);
-            if (candidate.origin !== start.origin) continue;
-            const safe = await publicUrl(candidate.href);
-            assets.set(safe.href, { url: safe.href, page: finalUrl });
-          } catch {}
-        }
-        for (const link of links) {
-          if (visited.size + pageQueue.length >= maxPages) break;
-          try {
-            const safe = await publicUrl(link);
-            if (safe.origin === start.origin && !visited.has(safe.href) && !pageQueue.includes(safe.href)) pageQueue.push(safe.href);
-          } catch {}
-        }
-      } catch (error) {
-        if (page === start.href) throw error;
-      }
-    }
-    return send(res, 200, { pagesScanned: visited.size, assets: [...assets.values()], scope: start.origin, capped: assets.size >= maxAssets || visited.size >= maxPages });
-  }
-  if (req.method === 'GET' && url.pathname === '/api/hash/image') {
-    const requested = url.searchParams.get('url');
-    const safe = await publicUrl(requested || '');
-    const { bytes, response } = await safeFetch(safe.href, 'image/avif,image/webp,image/apng,image/svg+xml,image/*;q=0.9', 5_000_000);
-    const type = response.headers.get('content-type') || 'application/octet-stream';
-    if (!type.toLowerCase().startsWith('image/') || type.toLowerCase().includes('svg')) return send(res, 415, { error: 'This source is not a supported raster image.' });
-    res.writeHead(200, { 'content-type': type, 'content-length': bytes.length, 'cache-control': 'private, max-age=300', 'x-content-type-options': 'nosniff' });
-    return res.end(bytes);
-  }
-  if (req.method === 'POST' && url.pathname === '/api/hash/search') {
-    const body = await readJson(req, 400_000);
-    const targetHash = String(body.targetHash || '').toLowerCase();
-    if (!/^[0-9a-f]{16}$/.test(targetHash)) return send(res, 400, { error: 'The reference image fingerprint is invalid.' });
-    const images = Array.isArray(body.images) ? body.images.slice(0, 60) : [];
-    const insert = db.prepare('INSERT OR IGNORE INTO image_hashes(id, hash, url, title, created_at) VALUES (?, ?, ?, ?, ?)');
-    for (const image of images) {
-      const hash = String(image.hash || '').toLowerCase();
-      if (!/^[0-9a-f]{16}$/.test(hash)) continue;
-      let safe; try { safe = await publicUrl(String(image.url || '')); } catch { continue; }
-      if (safe.protocol === 'https:' || safe.protocol === 'http:') insert.run(randomUUID(), hash, safe.href, String(image.title || '').slice(0, 140), new Date().toISOString());
-    }
-    const known = db.prepare('SELECT hash, url, title, created_at FROM image_hashes ORDER BY created_at DESC LIMIT 3000').all();
-    const distance = (a, b) => {
-      let value = BigInt('0x' + a) ^ BigInt('0x' + b), bits = 0;
-      while (value) { bits++; value &= value - 1n; }
-      return bits;
-    };
-    const matches = known.map(item => ({ ...item, distance: distance(targetHash, item.hash) }))
-      .filter(item => item.distance <= 8).sort((a, b) => a.distance - b.distance).slice(0, 40);
-    return send(res, 200, { indexed: images.length, compared: known.length, matches, threshold: 8 });
-  }
-  if (req.method === 'DELETE' && url.pathname === '/api/hash/index') {
-    db.exec('DELETE FROM image_hashes');
-    return send(res, 200, { deleted: true });
   }
   return send(res, 404, { error: 'API route not found.' });
 }

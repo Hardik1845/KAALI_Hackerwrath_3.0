@@ -12,10 +12,11 @@ const state = {
   routeRequestId: 0,
   lastRerouteAt: 0, lastRerouteLocation: null, reportLayer: null, routeLayer: null, serviceLayer: null,
   reportPollTimer: null, checkinTimer: null, checkinDeadline: null, cameraStream: null, cameraArmed: false,
-  isCapturing: false, referenceFile: null, referenceHash: null, contacts: loadJson('saheli.contacts', []),
+  isCapturing: false, referenceFile: null, contacts: loadJson('saheli.contacts', []),
   emergencyNumber: localStorage.getItem('saheli.emergency') || '112', selectedContact: null,
   reportLocation: null, reportMode: 'community', demoReportCount: 0, pickingReportLocation: false,
-  includeLocation: false, twilioConfigured: null, twilioStatusUnavailable: false
+  includeLocation: false, twilioConfigured: null, twilioStatusUnavailable: false,
+  hashShieldScan: null, hashShieldCase: null, hashShieldProviderReady: false
 };
 
 function loadJson(key, fallback) {
@@ -776,99 +777,208 @@ async function analyzeDeepfake() {
   } finally { progress.hidden = true; button.disabled = false; }
 }
 
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b), mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-async function perceptualHash(imageSource) {
-  let bitmap;
-  try { bitmap = imageSource instanceof Blob ? await createImageBitmap(imageSource) : await createImageBitmap(imageSource); }
-  catch { throw new Error('This image could not be decoded by your browser.'); }
-  const canvas = document.createElement('canvas'); canvas.width = 32; canvas.height = 32;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.drawImage(bitmap, 0, 0, 32, 32); bitmap.close?.();
-  const { data } = context.getImageData(0, 0, 32, 32);
-  const gray = new Float64Array(1024);
-  for (let index = 0; index < 1024; index++) gray[index] = .299 * data[index * 4] + .587 * data[index * 4 + 1] + .114 * data[index * 4 + 2];
-  const coefficients = [];
-  for (let u = 0; u < 8; u++) for (let v = 0; v < 8; v++) {
-    let sum = 0;
-    for (let x = 0; x < 32; x++) for (let y = 0; y < 32; y++) {
-      sum += gray[x * 32 + y] * Math.cos(((2 * x + 1) * u * Math.PI) / 64) * Math.cos(((2 * y + 1) * v * Math.PI) / 64);
-    }
-    coefficients.push(sum);
-  }
-  const cut = median(coefficients.slice(1));
-  let bits = 0n;
-  coefficients.forEach((value, index) => { if (index > 0 && value > cut) bits |= 1n << BigInt(index); });
-  return bits.toString(16).padStart(16, '0');
-}
-
 function setReferenceFile(file) {
-  try { validateImage(file); } catch (error) { toast(error.message, 'error'); return; }
-  state.referenceFile = file; state.referenceHash = null;
+  try { validateImage(file, 10); } catch (error) { toast(error.message, 'error'); return; }
+  state.referenceFile = file;
   $('#hash-file-label').textContent = `${file.name} · ${(file.size / (1024 * 1024)).toFixed(1)} MB`;
-  $('#hash-scan').disabled = false;
+  setImagePreview(file, $('#hash-preview'), $('#hash-drop'));
+  $('#hash-web-search').disabled = false;
+  $('#hash-vault-save').disabled = true; $('#hash-vault-match').disabled = true;
+  $('#hash-web-results').hidden = true;
+  state.hashShieldScan = null;
+  updateCaseCreateAvailability();
 }
 
-function extractImageSource(url) {
-  return `/api/hash/image?url=${encodeURIComponent(url)}`;
+function hashShieldUserId() {
+  let id = localStorage.getItem('kaali.hashshield.user_id');
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem('kaali.hashshield.user_id', id); }
+  return id;
 }
 
-async function scanWebsite() {
-  const site = $('#scan-site').value.trim();
-  if (!state.referenceFile) { toast('Choose a reference image first.', 'error'); return; }
-  if (!site) { toast('Enter a public web page to scan.', 'error'); return; }
-  try { new URL(site); } catch { toast('Enter a full website address, including https://.', 'error'); return; }
-  const progress = $('#hash-progress'), status = $('#hash-status'), resultBox = $('#hash-results'), button = $('#hash-scan');
-  progress.hidden = false; resultBox.hidden = true; button.disabled = true;
+async function hashShieldApi(path, options = {}) {
+  const headers = { ...(options.body instanceof FormData ? {} : options.body ? { 'content-type': 'application/json' } : {}), ...options.headers };
+  const response = await fetch(`/api/hashshield${path}`, { ...options, headers });
+  const type = response.headers.get('content-type') || '';
+  const data = type.includes('application/json') ? await response.json() : await response.text();
+  if (!response.ok) throw new Error(data.detail || data.error || `Hash Shield request failed (${response.status}).`);
+  return data;
+}
+
+async function refreshHashShieldStatus() {
+  const status = $('#hash-provider-status');
   try {
-    status.textContent = 'Creating a reference fingerprint in your browser…';
-    state.referenceHash ||= await perceptualHash(state.referenceFile);
-    status.textContent = 'Scanning up to eight pages on the selected website…';
-    const crawl = await api('/api/hash/crawl', { method: 'POST', body: JSON.stringify({ url: site }) });
-    const assets = crawl.assets || [];
-    if (!assets.length) throw new Error('No same-site images could be found. The page may block automated requests or use a separate image host.');
-    const indexed = [], concurrency = 3; let cursor = 0, completed = 0, errors = 0;
-    async function worker() {
-      while (cursor < assets.length) {
-        const asset = assets[cursor++];
-        try {
-          const blob = await api(extractImageSource(asset.url));
-          const hash = await perceptualHash(blob);
-          indexed.push({ url: asset.url, hash });
-        } catch { errors++; }
-        completed++;
-        status.textContent = `Comparing images on ${crawl.scope} · ${completed} of ${assets.length}`;
-      }
-    }
-    await Promise.all(Array.from({ length: Math.min(concurrency, assets.length) }, worker));
-    const results = await api('/api/hash/search', { method: 'POST', body: JSON.stringify({ targetHash: state.referenceHash, images: indexed }) });
-    resultBox.replaceChildren();
-    const title = document.createElement('strong'); title.textContent = results.matches.length ? `${results.matches.length} visually similar image${results.matches.length === 1 ? '' : 's'} found` : 'No close matches found'; resultBox.append(title);
-    const summary = document.createElement('p'); summary.textContent = `Checked ${completed} image${completed === 1 ? '' : 's'} across ${crawl.pagesScanned} same-site page${crawl.pagesScanned === 1 ? '' : 's'} on ${crawl.scope}. ${errors ? `${errors} image${errors === 1 ? '' : 's'} could not be analyzed. ` : ''}The local index contains ${results.compared} image fingerprint${results.compared === 1 ? '' : 's'}.`; resultBox.append(summary);
-    for (const match of results.matches) {
-      const row = document.createElement('div'); row.className = 'match-item';
-      const link = document.createElement('a'); link.href = match.url; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = match.url;
-      const detail = document.createElement('small'); detail.textContent = `Perceptual distance ${match.distance}/64 · ${new Date(match.created_at).toLocaleDateString()}`;
-      row.append(link, detail); resultBox.append(row);
-    }
-    resultBox.hidden = false;
-    $('#hash-clear').hidden = results.compared === 0;
-    if (crawl.capped) toast('The scan reached its page or image limit. This is a focused website check, not a full-web search.');
-    else toast(`Checked ${completed} images from ${crawl.scope}.`);
-  } catch (error) { toast(error.message, 'error'); status.textContent = 'Scan stopped. You can correct the website address and try again.'; }
-  finally { progress.hidden = true; button.disabled = false; }
+    const response = await fetch('/api/hash/web-search/health');
+    const health = await response.json();
+    if (!response.ok) throw new Error(health.error || 'Hash Shield is not available.');
+    state.hashShieldProviderReady = Boolean(health.web_search_configured);
+    status.textContent = state.hashShieldProviderReady ? 'Ready to search' : 'Web search is currently unavailable.';
+    status.classList.toggle('error', !state.hashShieldProviderReady);
+  } catch {
+    state.hashShieldProviderReady = false;
+    status.textContent = 'Hash Shield is currently unavailable.';
+    status.classList.add('error');
+  }
 }
 
-async function clearHashIndex() {
-  if (!window.confirm('Clear all image fingerprints and source links saved by this Kaali server? This cannot be undone.')) return;
+function renderHashShieldScan(result) {
+  const box = $('#hash-web-results'); box.replaceChildren();
+  const summary = document.createElement('p');
+  summary.textContent = `Fingerprint ${result.phash || ''} · ${result.daily_scans_remaining} web searches remaining today.`;
+  box.append(summary);
+  if (result.stop_ncii) {
+    const heading = document.createElement('strong'); heading.textContent = 'External web search was skipped for privacy.'; box.append(heading);
+    const instructions = document.createElement('p'); instructions.textContent = result.stop_ncii.message || 'Register this image directly with StopNCII.'; box.append(instructions);
+    const link = document.createElement('a'); link.href = 'https://stopncii.org/'; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = 'Open StopNCII.org'; box.append(link);
+    return;
+  }
+  if (!result.candidates?.length) {
+    const empty = document.createElement('p'); empty.textContent = 'No possible matches were returned by the configured provider. Search results are not exhaustive.'; box.append(empty); return;
+  }
+  const heading = document.createElement('strong'); heading.textContent = `${result.candidates.length} possible result${result.candidates.length === 1 ? '' : 's'} · review before creating a case`; box.append(heading);
+  for (const candidate of result.candidates) {
+    const row = document.createElement('div'); row.className = 'hash-candidate';
+    const select = document.createElement('button'); select.type = 'button'; select.className = 'hash-candidate-select'; select.dataset.candidateId = candidate.candidate_id; select.setAttribute('aria-pressed', 'false'); select.textContent = 'Add to case';
+    select.addEventListener('click', () => { const selected = select.getAttribute('aria-pressed') !== 'true'; select.setAttribute('aria-pressed', String(selected)); select.textContent = selected ? 'Selected' : 'Add to case'; updateCaseCreateAvailability(); });
+    const body = document.createElement('span');
+    const anchor = document.createElement('a');
+    try { const target = new URL(candidate.page_url); if (!['https:', 'http:'].includes(target.protocol)) throw new Error(); anchor.href = target.href; }
+    catch { anchor.href = '#'; }
+    anchor.target = '_blank'; anchor.rel = 'noreferrer'; anchor.textContent = candidate.domain || candidate.page_url || 'Search result';
+    const detail = document.createElement('small');
+    const verifyText = candidate.verified === true ? 'Fingerprint match' : candidate.verified === false ? 'No fingerprint match' : 'Could not verify';
+    detail.textContent = `${candidate.match_type || 'possible'} · ${verifyText}${candidate.distance == null ? '' : ` · distance ${candidate.distance}/64`}${candidate.note ? ` · ${candidate.note}` : ''}`;
+    body.append(anchor, detail); row.append(select, body); box.append(row);
+  }
+  updateCaseCreateAvailability();
+}
+
+function updateCaseCreateAvailability() {
+  const hasCandidates = $$('#hash-web-results [data-candidate-id][aria-pressed="true"]').length > 0;
+  const hasUrls = Boolean($('#hash-case-urls').value.trim());
+  const scanReady = Boolean(state.hashShieldScan);
+  $('#hash-case-create').disabled = !scanReady || (!hasCandidates && !hasUrls) || (hasCandidates && !state.hashShieldScan?.original_id);
+}
+
+async function runHashShieldSearch() {
+  if (!state.referenceFile) return;
+  const imageType = $('#hash-image-type').value;
+  if (imageType === 'minor') {
+    const box = $('#hash-web-results'); box.replaceChildren();
+    const message = document.createElement('p'); message.textContent = 'Hash Shield will not process or search an image involving someone under 18. Contact Childline 1098 and report at cybercrime.gov.in.'; box.append(message);
+    const link = document.createElement('a'); link.href = 'https://cybercrime.gov.in/'; link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = 'Open National Cyber Crime Reporting Portal'; box.append(link); box.hidden = false; return;
+  }
+  const intimate = imageType === 'intimate';
+  if (!intimate && !state.hashShieldProviderReady) { toast('Configure a live reverse-image provider and API credentials in HashShield/.env before searching. Mock search results are not used.', 'error'); return; }
+  const button = $('#hash-web-search'), progress = $('#hash-web-progress'), progressText = $('#hash-web-progress-text'), results = $('#hash-web-results');
+  button.disabled = true; progress.hidden = false; results.hidden = true;
   try {
-    await api('/api/hash/index', { method: 'DELETE' });
-    $('#hash-results').hidden = true; $('#hash-clear').hidden = true; state.referenceHash = null;
-    toast('The local image fingerprint index has been cleared.');
+    progressText.textContent = intimate ? 'Creating a private fingerprint; external search is disabled…' : 'Searching the configured reverse-image provider…';
+    const form = new FormData(); form.append('file', state.referenceFile, state.referenceFile.name);
+    form.append('consent', 'true'); form.append('intimate', String(intimate)); form.append('is_minor', 'false');
+    const result = await hashShieldApi('/v1/scan', { method: 'POST', body: form });
+    state.hashShieldScan = result;
+    $('#hash-vault-save').disabled = false; $('#hash-vault-match').disabled = false;
+    renderHashShieldScan(result); results.hidden = false; updateCaseCreateAvailability();
+    toast(intimate ? 'Private fingerprint created. No external search was made.' : `${result.candidates.length} possible web results returned.`);
+  } catch (error) {
+    results.replaceChildren(); const message = document.createElement('p'); message.textContent = error.message; results.append(message); results.hidden = false;
+    toast(error.message, 'error');
+  } finally { progress.hidden = true; button.disabled = false; }
+}
+
+async function hashImageOnly() {
+  if (!state.referenceFile) return;
+  const output = $('#hash-vault-output'); output.hidden = false; output.textContent = 'Hashing image in memory…';
+  try {
+    const form = new FormData(); form.append('file', state.referenceFile, state.referenceFile.name);
+    const result = await hashShieldApi('/v1/hash', { method: 'POST', body: form });
+    state.hashShieldScan = { ...result, original_id: null };
+    $('#hash-vault-save').disabled = false; $('#hash-vault-match').disabled = false;
+    output.textContent = `SHA-256: ${result.sha256}\npHash: ${result.phash}\ndHash: ${result.dhash}\nDimensions: ${result.width} × ${result.height}`;
+  } catch (error) { output.textContent = error.message; }
+}
+
+async function saveHashVault() {
+  if (!state.hashShieldScan?.phash) return;
+  const scan = state.hashShieldScan, output = $('#hash-vault-output'); output.hidden = false;
+  try {
+    const entry = await hashShieldApi('/v1/vault', { method: 'POST', body: JSON.stringify({ user_id: hashShieldUserId(), phash: scan.phash, dhash: scan.dhash, sha256: scan.sha256, label: 'Kaali reference image' }) });
+    output.textContent = `Fingerprint saved in this Hash Shield vault. Vault ID: ${entry.vault_id}`;
+  } catch (error) { output.textContent = error.message; }
+}
+
+async function matchHashVault() {
+  if (!state.hashShieldScan?.phash) return;
+  const form = new FormData(); form.append('user_id', hashShieldUserId()); form.append('hash_value', state.hashShieldScan.phash); form.append('algorithm', 'phash');
+  const output = $('#hash-vault-output'); output.hidden = false; output.textContent = 'Comparing fingerprints…';
+  try {
+    const result = await hashShieldApi('/v1/match', { method: 'POST', body: form });
+    output.textContent = result.matches.length ? result.matches.map(item => `${item.is_match ? 'MATCH' : 'No match'} · ${item.label || item.vault_id} · distance ${item.distance}/${result.threshold}`).join('\n') : `No saved fingerprints for this browser yet. ${result.note}`;
+  } catch (error) { output.textContent = error.message; }
+}
+
+async function createHashShieldCase() {
+  const scan = state.hashShieldScan; if (!scan) return toast('Hash an image before creating a case.', 'error');
+  const candidate_ids = $$('#hash-web-results [data-candidate-id][aria-pressed="true"]').map(button => button.dataset.candidateId);
+  const manual_urls = $('#hash-case-urls').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  if (candidate_ids.length && !scan.original_id) return toast('Create a Hash Shield web scan first to attach discovered candidates.', 'error');
+  try {
+    const evidence_hashes = scan.original_id ? [] : [`phash_${scan.phash}`, `sha256_${scan.sha256}`];
+    const result = await hashShieldApi('/v1/cases', { method: 'POST', body: JSON.stringify({ user_id: hashShieldUserId(), original_id: scan.original_id || null, candidate_ids, manual_urls, evidence_hashes, notes: $('#hash-case-notes').value.trim() || null, is_minor: false }) });
+    state.hashShieldCase = result; localStorage.setItem('kaali.hashshield.case_id', result.case_id); $('#hash-case-actions').hidden = false; renderHashShieldCase(result); toast(`Case ${result.case_id} created.`);
   } catch (error) { toast(error.message, 'error'); }
+}
+
+function renderHashShieldCase(data) {
+  const output = $('#hash-case-output'); output.replaceChildren();
+  const line = document.createElement('p'); line.textContent = `Case ${data.case_id} · ${data.status} · ${data.urls?.length || 0} target URL(s)${data.seconds_remaining == null ? '' : ` · ${Math.ceil(data.seconds_remaining / 3600)} hours remaining`}${data.deadline ? ` · SLA deadline ${new Date(data.deadline).toLocaleString()}` : ''}`; output.append(line);
+  for (const rawUrl of data.urls || []) {
+    const row = document.createElement('div'); const link = document.createElement('a');
+    try { const target = new URL(rawUrl); if (!['https:', 'http:'].includes(target.protocol)) throw new Error(); link.href = target.href; } catch { link.href = '#'; }
+    link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = rawUrl; row.append(link); output.append(row);
+  }
+  for (const lookup of data.lookups || []) {
+    const pre = document.createElement('pre'); pre.textContent = `${lookup.domain || lookup.url}: ${lookup.registrar || 'host details unavailable'}${lookup.abuse_email ? ` · ${lookup.abuse_email}` : ''}${lookup.abuse_url ? ` · ${lookup.abuse_url}` : ''}`; output.append(pre);
+  }
+}
+
+async function hashShieldCaseAction(action, options = {}) {
+  const current = state.hashShieldCase; if (!current?.case_id) return;
+  try {
+    const result = await hashShieldApi(`/v1/cases/${encodeURIComponent(current.case_id)}${action}`, options);
+    if (action === '/notices') {
+      const output = $('#hash-notices-output'); output.replaceChildren(); output.hidden = false;
+      const marker = document.createElement('p'); marker.textContent = `${result.todo_marker || 'Review this draft with a qualified adviser.'} · Evidence SHA-256 ${result.evidence_sha256 || ''}`; output.append(marker);
+      for (const [name, text] of Object.entries(result.notices || {})) { const heading = document.createElement('strong'); heading.textContent = name; const pre = document.createElement('pre'); pre.textContent = String(text); output.append(heading, pre); }
+      if (result.pdf_base64) { const download = document.createElement('a'); download.href = `data:application/pdf;base64,${result.pdf_base64}`; download.download = `kaali-case-${current.case_id}-evidence.pdf`; download.textContent = 'Download evidence dossier PDF'; output.append(download); }
+      return;
+    }
+    if (action === '/check') {
+      const output = $('#hash-case-output');
+      for (const item of result.results || []) { const row = document.createElement('pre'); row.textContent = `${item.url}\n${item.removed_assessment}: ${item.note}`; output.append(row); }
+      return;
+    }
+    if (action === '/resolve') { $('#hash-case-output').textContent = result.escalation ? `Case escalated. Guidance: ${JSON.stringify(result.escalation)}` : `Case ${result.status}.`; return; }
+    state.hashShieldCase = action === '/sent' ? { ...current, ...result } : result;
+    renderHashShieldCase(state.hashShieldCase);
+  } catch (error) { toast(error.message, 'error'); }
+}
+
+async function inspectHashShieldDueJobs() {
+  const output = $('#hash-due-output'); output.hidden = false; output.textContent = 'Checking due cases…';
+  try { const result = await hashShieldApi('/v1/jobs/due'); output.textContent = result.count ? result.jobs.map(job => `${job.case_id} · ${Math.ceil(job.overdue_seconds / 3600)} hours overdue`).join('\n') : 'No overdue cases.'; }
+  catch (error) { output.textContent = error.message; }
+}
+
+async function restoreHashShieldCase() {
+  const caseId = localStorage.getItem('kaali.hashshield.case_id');
+  if (!caseId) return;
+  try {
+    const data = await hashShieldApi(`/v1/cases/${encodeURIComponent(caseId)}`);
+    state.hashShieldCase = data; $('#hash-case-actions').hidden = false; renderHashShieldCase(data);
+  } catch (error) {
+    const output = $('#hash-case-output'); output.textContent = `Saved case ${caseId} is not currently available: ${error.message}`; output.hidden = false;
+  }
 }
 
 function openCaptureDb() {
@@ -1038,9 +1148,29 @@ function bindEvents() {
   $('#deepfake-drop').addEventListener('dragleave', () => $('#deepfake-drop').classList.remove('dragging'));
   $('#deepfake-drop').addEventListener('drop', event => { event.preventDefault(); $('#deepfake-drop').classList.remove('dragging'); const file = event.dataTransfer.files[0]; if (!file) return; try { validateDeepfakeImage(file); } catch (error) { toast(error.message, 'error'); return; } state.deepfakeFile = file; setImagePreview(file, $('#deepfake-preview'), $('#deepfake-drop')); $('#deepfake-run').disabled = false; $('#deepfake-result').hidden = true; });
   $('#deepfake-run').addEventListener('click', analyzeDeepfake);
+  $('#hash-browse').addEventListener('click', event => { event.preventDefault(); $('#hash-file').click(); });
   $('#hash-file').addEventListener('change', event => { const file = event.target.files[0]; if (file) setReferenceFile(file); });
-  $('#hash-scan').addEventListener('click', scanWebsite);
-  $('#hash-clear').addEventListener('click', clearHashIndex);
+  $('#hash-drop').addEventListener('click', event => { if (event.target.closest('button')) return; $('#hash-file').click(); });
+  $('#hash-drop').addEventListener('dragover', event => { event.preventDefault(); $('#hash-drop').classList.add('dragging'); });
+  $('#hash-drop').addEventListener('dragleave', () => $('#hash-drop').classList.remove('dragging'));
+  $('#hash-drop').addEventListener('drop', event => { event.preventDefault(); $('#hash-drop').classList.remove('dragging'); const file = event.dataTransfer.files[0]; if (file) setReferenceFile(file); });
+  $('#hash-web-search').addEventListener('click', runHashShieldSearch);
+  $('#hash-only').addEventListener('click', hashImageOnly);
+  $('#hash-vault-save').addEventListener('click', saveHashVault);
+  $('#hash-vault-match').addEventListener('click', matchHashVault);
+  $('#hash-case-create').addEventListener('click', createHashShieldCase);
+  $('#hash-case-urls').addEventListener('input', updateCaseCreateAvailability);
+  $('#hash-case-refresh').addEventListener('click', () => state.hashShieldCase && hashShieldApi(`/v1/cases/${encodeURIComponent(state.hashShieldCase.case_id)}`).then(data => { state.hashShieldCase = data; renderHashShieldCase(data); }).catch(error => toast(error.message, 'error')));
+  $('#hash-case-lookup').addEventListener('click', () => hashShieldCaseAction('/lookup', { method: 'POST' }));
+  $('#hash-case-notices').addEventListener('click', () => hashShieldCaseAction('/notices', { method: 'POST' }));
+  $('#hash-case-check').addEventListener('click', () => hashShieldCaseAction('/check', { method: 'POST' }));
+  $('#hash-case-sent').addEventListener('click', () => { if (window.confirm('Only continue if you have sent the notice yourself. This starts the 24-hour follow-up timer.')) hashShieldCaseAction('/sent', { method: 'POST' }); });
+  $('#hash-case-resolved').addEventListener('click', () => hashShieldCaseAction('/resolve', { method: 'POST', body: JSON.stringify({ removed: true }) }));
+  $('#hash-case-escalate').addEventListener('click', () => hashShieldCaseAction('/resolve', { method: 'POST', body: JSON.stringify({ removed: false }) }));
+  $('#hash-due-jobs').addEventListener('click', inspectHashShieldDueJobs);
+  $('#hash-image-type').addEventListener('change', () => {
+    $('#hash-web-search').textContent = $('#hash-image-type').value === 'intimate' ? 'Create private fingerprint — show StopNCII guidance' : $('#hash-image-type').value === 'minor' ? 'Show child-safety guidance' : 'I agree — Search the web';
+  });
   $('#camera-toggle').addEventListener('click', async () => { try { await turnCameraOn(); } catch (error) { toast(`Camera could not be armed: ${error.message}`, 'error'); } });
   $('#camera-stop').addEventListener('click', turnCameraOff);
   $('#delete-captures').addEventListener('click', removeAllCaptures);
@@ -1054,6 +1184,8 @@ async function initialize() {
   bindEvents(); initMap(); renderContacts(); updateEmergencyNumber(state.emergencyNumber); renderEvidence();
   try { await api('/api/health'); $('#connection-status').textContent = 'Kaali is ready'; }
   catch { $('#connection-status').textContent = 'Local server unavailable'; $('.connection').classList.add('offline'); }
+  refreshHashShieldStatus();
+  restoreHashShieldCase();
   const savedDeadline = Number(localStorage.getItem('saheli.checkin'));
   if (Number.isFinite(savedDeadline) && savedDeadline > 0) { if (savedDeadline <= Date.now()) stopCheckinTimer(true); else startCheckinTimer(Math.ceil((savedDeadline - Date.now()) / 60_000)); state.checkinDeadline = savedDeadline; tickCheckin(); }
   window.addEventListener('resize', () => state.map?.invalidateSize());

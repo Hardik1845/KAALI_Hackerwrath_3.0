@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KAALI — Live Guardian Tactical Radar</title>
+  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+
+  <style>
+    :root {
+      --bg-dark: #0a0d14;
+      --card-bg: rgba(16, 22, 36, 0.82);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --accent-red: #ef4444;
+      --accent-red-glow: rgba(239, 68, 68, 0.35);
+      --accent-green: #10b981;
+      --accent-blue: #3b82f6;
+      --accent-cyan: #06b6d4;
+      --accent-amber: #f59e0b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    #map {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+      background: #090c10;
+    }
+
+    /* Glassmorphism Common Style */
+    .glass-panel {
+      background: var(--card-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+    }
+
+    /* Top Radar Header HUD */
+    .top-hud {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      right: 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 22px;
+      pointer-events: auto;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .radar-pulse-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(239, 68, 68, 0.2);
+      border: 2px solid var(--accent-red);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-red);
+      font-size: 16px;
+      animation: pulse-ring 1.8s infinite;
+    }
+
+    @keyframes pulse-ring {
+      0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+      70% { box-shadow: 0 0 0 14px rgba(239, 68, 68, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+    }
+
+    .brand-titles h1 {
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      color: #fff;
+    }
+
+    .brand-titles p {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .hud-metrics {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .metric-item {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .metric-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .metric-value {
+      font-size: 13px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      background: rgba(239, 68, 68, 0.18);
+      color: var(--accent-red);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+    }
+
+    .status-badge.escalated {
+      background: rgba(245, 158, 11, 0.18);
+      color: var(--accent-amber);
+      border-color: rgba(245, 158, 11, 0.4);
+    }
+
+    .status-badge.cancelled {
+      background: rgba(16, 185, 129, 0.18);
+      color: var(--accent-green);
+      border-color: rgba(16, 185, 129, 0.4);
+    }
+
+    /* Left Sidebar: Situational Details */
+    .left-sidebar {
+      position: absolute;
+      top: 95px;
+      left: 20px;
+      width: 340px;
+      bottom: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      pointer-events: auto;
+      overflow-y: auto;
+    }
+
+    .card-section {
+      padding: 16px;
+    }
+
+    .card-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .havens-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .haven-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .haven-item:hover {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .haven-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .haven-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+    }
+
+    .icon-police { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
+    .icon-hospital { background: rgba(16, 185, 129, 0.2); color: var(--accent-green); }
+    .icon-pharmacy { background: rgba(245, 158, 11, 0.2); color: var(--accent-amber); }
+    .icon-metro { background: rgba(6, 182, 212, 0.2); color: var(--accent-cyan); }
+
+    .haven-text h4 {
+      font-size: 12px;
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .haven-text p {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .haven-dist {
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-cyan);
+      font-weight: 600;
+    }
+
+    /* Ambient Audio Player Card */
+    .audio-card {
+      padding: 16px;
+    }
+
+    .audio-btn {
+      width: 100%;
+      padding: 10px 14px;
+      background: rgba(59, 130, 246, 0.15);
+      border: 1px solid rgba(59, 130, 246, 0.4);
+      color: #60a5fa;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .audio-btn:hover {
+      background: rgba(59, 130, 246, 0.25);
+      color: #93c5fd;
+    }
+
+    .audio-btn.disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      pointer-events: none;
+    }
+
+    /* Floating Quick Actions */
+    .action-btn-red {
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+      border: none;
+      color: white;
+      border-radius: 8px;
+      font-weight: 700;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px var(--accent-red-glow);
+      text-decoration: none;
+      transition: transform 0.15s ease;
+    }
+
+    .action-btn-red:hover {
+      transform: translateY(-2px);
+    }
+
+    .action-btn-secondary {
+      width: 100%;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: all 0.2s;
+    }
+
+    .action-btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    /* Custom Leaflet Pulse Marker */
+    .pulse-marker-container {
+      position: relative;
+    }
+
+    .pulse-marker-center {
+      width: 16px;
+      height: 16px;
+      background: #ef4444;
+      border: 2px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(239, 68, 68, 0.8);
+    }
+
+    .pulse-marker-wave {
+      position: absolute;
+      top: -12px;
+      left: -12px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(239, 68, 68, 0.4);
+      animation: pulse-wave 1.6s ease-out infinite;
+    }
+
+    @keyframes pulse-wave {
+      0% { transform: scale(0.3); opacity: 1; }
+      100% { transform: scale(1.6); opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Fullscreen Map Canvas -->
+  <div id="map"></div>
+
+  <!-- Top Glass HUD -->
+  <div class="glass-panel top-hud">
+    <div class="brand-section">
+      <div class="radar-pulse-icon">
+        <i class="fa-solid fa-satellite-dish"></i>
+      </div>
+      <div class="brand-titles">
+        <h1 id="victimNameDisplay">KAALI EMERGENCY RADAR</h1>
+        <p>SESSION ID: <span id="sessionIdDisplay">{{SESSION_ID}}</span></p>
+      </div>
+    </div>
+
+    <div class="hud-metrics">
+      <div class="metric-item">
+        <span class="metric-label">Auto-Escalate In</span>
+        <span class="metric-value" id="timerDisplay">60s</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Coordinates</span>
+        <span class="metric-value" id="coordsDisplay">Loading...</span>
+      </div>
+      <div class="metric-item">
+        <span class="metric-label">Speed</span>
+        <span class="metric-value" id="speedDisplay">0.0 m/s</span>
+      </div>
+      <div class="status-badge" id="statusBadge">
+        <i class="fa-solid fa-circle-radiation"></i> <span id="statusText">ACTIVE</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Left Floating Sidebar -->
+  <div class="left-sidebar">
+    
+    <!-- Emergency Call Action -->
+    <a href="tel:112" class="action-btn-red">
+      <i class="fa-solid fa-phone"></i> DISPATCH POLICE CONTROL ROOM (112)
+    </a>
+
+    <!-- Ambient Audio Witness -->
+    <div class="glass-panel card-section audio-card">
+      <div class="card-title">
+        <i class="fa-solid fa-microphone-lines"></i> Ambient Audio Witness
+      </div>
+      <p id="audioStatusText" style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px;">
+        Listening for encrypted audio stream...
+      </p>
+      <button id="audioPlayBtn" class="audio-btn disabled" onclick="toggleAudioPlayback()">
+        <i class="fa-solid fa-play" id="audioBtnIcon"></i> <span id="audioBtnLabel">No Audio Recorded</span>
+      </button>
+      <audio id="audioElement" style="display: none;"></audio>
+    </div>
+
+    <!-- Nearest Safe Havens -->
+    <div class="glass-panel card-section">
+      <div class="card-title">
+        <i class="fa-solid fa-shield-halved"></i> Nearest Safe Havens
+      </div>
+      <div class="havens-list" id="havensContainer">
+        <div style="font-size: 11px; color: var(--text-muted);">Calculating nearby stations...</div>
+      </div>
+    </div>
+
+    <!-- Registered Emergency Contacts -->
+    <div class="glass-panel card-section">
+      <div class="card-title">
+        <i class="fa-solid fa-users"></i> Alerted Contacts
+      </div>
+      <div class="havens-list" id="contactsContainer">
+        <div style="font-size: 11px; color: var(--text-muted);">Syncing emergency contacts...</div>
+      </div>
+    </div>
+
+    <!-- Download Dossier Action -->
+    <button class="action-btn-secondary" onclick="downloadForensicDossier()">
+      <i class="fa-solid fa-file-shield"></i> Export Court Dossier (PDF / BSA 65B)
+    </button>
+  </div>
+
+  <script>
+    const SESSION_ID = "{{SESSION_ID}}";
+    let map = null;
+    let victimMarker = null;
+    let trajectoryLine = null;
+    let havenMarkers = [];
+    let pathCoordinates = [];
+    let ws = null;
+    let countdownInterval = null;
+    let remainingSeconds = 60;
+
+    // Initialize Leaflet Map with Dark Matter Tiles
+    function initMap(lat, lng) {
+      map = L.map('map', {
+        zoomControl: false,
+        attributionControl: false
+      }).setView([lat, lng], 16);
+
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        maxZoom: 19,
+        subdomains: 'abcd',
+      }).addTo(map);
+
+      // Trajectory polyline
+      trajectoryLine = L.polyline([], {
+        color: '#06b6d4',
+        weight: 3,
+        opacity: 0.8,
+        dashArray: '4, 8'
+      }).addTo(map);
+
+      // Custom pulsing beacon icon
+      const pulseIcon = L.divIcon({
+        className: 'custom-pulse-marker',
+        html: `
+          <div class="pulse-marker-container">
+            <div class="pulse-marker-wave"></div>
+            <div class="pulse-marker-center"></div>
+          </div>
+        `,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+
+      victimMarker = L.marker([lat, lng], { icon: pulseIcon }).addTo(map);
+    }
+
+    // Update Live Location
+    function updateLocation(lat, lng, speed, accuracy) {
+      if (!map) {
+        initMap(lat, lng);
+      }
+
+      const newLatLng = [lat, lng];
+      victimMarker.setLatLng(newLatLng);
+      pathCoordinates.push(newLatLng);
+      trajectoryLine.setLatLngs(pathCoordinates);
+      map.panTo(newLatLng, { animate: true, duration: 1 });
+
+      document.getElementById("coordsDisplay").innerText = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+      document.getElementById("speedDisplay").innerText = speed ? `${speed.toFixed(1)} m/s` : `0.0 m/s`;
+    }
+
+    // Render Safe Havens on Map & List
+    function renderSafeHavens(havens) {
+      const container = document.getElementById("havensContainer");
+      container.innerHTML = "";
+
+      // Remove existing markers
+      havenMarkers.forEach(m => map && map.removeLayer(m));
+      havenMarkers = [];
+
+      havens.forEach(h => {
+        let iconClass = "icon-police";
+        let faIcon = "fa-shield";
+        if (h.type === "hospital") { iconClass = "icon-hospital"; faIcon = "fa-hospital"; }
+        else if (h.type === "pharmacy") { iconClass = "icon-pharmacy"; faIcon = "fa-prescription-bottle-medical"; }
+        else if (h.type === "metro") { iconClass = "icon-metro"; faIcon = "fa-train-subway"; }
+
+        // HTML Item
+        const item = document.createElement("div");
+        item.className = "haven-item";
+        item.innerHTML = `
+          <div class="haven-info">
+            <div class="haven-icon ${iconClass}">
+              <i class="fa-solid ${faIcon}"></i>
+            </div>
+            <div class="haven-text">
+              <h4>${h.name}</h4>
+              <p>${h.type.toUpperCase()} • 24/7 OPEN</p>
+            </div>
+          </div>
+          <span class="haven-dist">${h.distance_m}m</span>
+        `;
+        container.appendChild(item);
+
+        // Map Marker
+        if (map) {
+          const m = L.circleMarker([h.lat, h.lng], {
+            radius: 6,
+            fillColor: h.type === 'police' ? '#3b82f6' : (h.type === 'hospital' ? '#10b981' : '#f59e0b'),
+            color: '#ffffff',
+            weight: 1.5,
+            opacity: 1,
+            fillOpacity: 0.8
+          }).bindPopup(`<b>${h.name}</b><br>${h.type.toUpperCase()}<br>Distance: ${h.distance_m}m`);
+          m.addTo(map);
+          havenMarkers.push(m);
+        }
+      });
+    }
+
+    // Render Contacts
+    function renderContacts(contacts) {
+      const container = document.getElementById("contactsContainer");
+      container.innerHTML = "";
+      if (!contacts || contacts.length === 0) {
+        container.innerHTML = `<div style="font-size: 11px; color: var(--text-muted);">No contacts specified.</div>`;
+        return;
+      }
+
+      contacts.forEach(c => {
+        const item = document.createElement("div");
+        item.className = "haven-item";
+        item.innerHTML = `
+          <div class="haven-info">
+            <div class="haven-icon icon-police">
+              <i class="fa-solid fa-user-shield"></i>
+            </div>
+            <div class="haven-text">
+              <h4>${c.name} (${c.relation})</h4>
+              <p>${c.phone}</p>
+            </div>
+          </div>
+          <a href="tel:${c.phone}" style="color: var(--accent-green); text-decoration: none; font-size: 14px;">
+            <i class="fa-solid fa-phone"></i>
+          </a>
+        `;
+        container.appendChild(item);
+      });
+    }
+
+    // Audio Playback
+    let isPlaying = false;
+    function setupAudio(audioUrl, sha256) {
+      const btn = document.getElementById("audioPlayBtn");
+      const statusText = document.getElementById("audioStatusText");
+      const audioElem = document.getElementById("audioElement");
+
+      btn.classList.remove("disabled");
+      document.getElementById("audioBtnLabel").innerText = "Play Ambient Audio";
+      statusText.innerHTML = `Secured Audio Witness <br><font face="monospace" style="color: #60a5fa">${sha256 ? sha256.substring(0, 16) + '...' : ''}</font>`;
+      audioElem.src = audioUrl;
+
+      audioElem.onended = () => {
+        isPlaying = false;
+        document.getElementById("audioBtnIcon").className = "fa-solid fa-play";
+        document.getElementById("audioBtnLabel").innerText = "Replay Audio";
+      };
+    }
+
+    function toggleAudioPlayback() {
+      const audioElem = document.getElementById("audioElement");
+      if (!audioElem.src) return;
+
+      if (isPlaying) {
+        audioElem.pause();
+        isPlaying = false;
+        document.getElementById("audioBtnIcon").className = "fa-solid fa-play";
+        document.getElementById("audioBtnLabel").innerText = "Play Ambient Audio";
+      } else {
+        audioElem.play();
+        isPlaying = true;
+        document.getElementById("audioBtnIcon").className = "fa-solid fa-pause";
+        document.getElementById("audioBtnLabel").innerText = "Pause Audio";
+      }
+    }
+
+    // Download Court Dossier
+    async function downloadForensicDossier() {
+      try {
+        const resp = await fetch(`/api/v1/sos/${SESSION_ID}/dossier`);
+        if (!resp.ok) throw new Error("Failed to fetch dossier");
+        const data = await resp.json();
+        
+        // Convert Base64 to blob and trigger download
+        const byteCharacters = atob(data.pdf_base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: "application/pdf" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `KAALI_Incident_Dossier_${SESSION_ID}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      } catch (err) {
+        alert("Error generating forensic dossier: " + err.message);
+      }
+    }
+
+    // Auto-escalation countdown
+    function startCountdown(seconds) {
+      remainingSeconds = seconds;
+      clearInterval(countdownInterval);
+      countdownInterval = setInterval(() => {
+        if (remainingSeconds > 0) {
+          remainingSeconds--;
+          document.getElementById("timerDisplay").innerText = `${remainingSeconds}s`;
+        } else {
+          clearInterval(countdownInterval);
+          document.getElementById("timerDisplay").innerText = "EXPIRED";
+          setEscalatedState();
+        }
+      }, 1000);
+    }
+
+    function setEscalatedState() {
+      const badge = document.getElementById("statusBadge");
+      badge.className = "status-badge escalated";
+      document.getElementById("statusText").innerText = "ESCALATED (PCR 112)";
+    }
+
+    function setCancelledState(isDuress) {
+      clearInterval(countdownInterval);
+      document.getElementById("timerDisplay").innerText = "DISARMED";
+      const badge = document.getElementById("statusBadge");
+      if (isDuress) {
+        badge.className = "status-badge escalated";
+        document.getElementById("statusText").innerText = "COERCION / POLICE DISPATCH";
+      } else {
+        badge.className = "status-badge cancelled";
+        document.getElementById("statusText").innerText = "DISARMED (SAFE)";
+      }
+    }
+
+    // Connect WebSocket
+    function connectWebSocket() {
+      const loc = window.location;
+      const wsProtocol = loc.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = `${wsProtocol}//${loc.host}/ws/guardian/${SESSION_ID}`;
+
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log("Tactical Radar WebSocket connected to session", SESSION_ID);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "init_state") {
+            document.getElementById("victimNameDisplay").innerText = `${data.user_name} — ACTIVE SOS`;
+            if (data.current_location) {
+              updateLocation(data.current_location.lat, data.current_location.lng, data.current_location.speed, data.current_location.accuracy);
+            }
+            if (data.trajectory && data.trajectory.length > 0) {
+              pathCoordinates = data.trajectory.map(p => [p.lat, p.lng]);
+              trajectoryLine.setLatLngs(pathCoordinates);
+            }
+            if (data.nearest_havens) {
+              renderSafeHavens(data.nearest_havens);
+            }
+            if (data.audio_available) {
+              setupAudio(`/api/v1/sos/${SESSION_ID}/audio`);
+            }
+            if (data.auto_escalated) {
+              setEscalatedState();
+            } else {
+              startCountdown(60);
+            }
+          } else if (data.type === "location_update") {
+            const loc = data.location;
+            updateLocation(loc.lat, loc.lng, loc.speed, loc.accuracy);
+          } else if (data.type === "escalation") {
+            setEscalatedState();
+          } else if (data.type === "cancelled") {
+            setCancelledState(false);
+          } else if (data.type === "duress_alert") {
+            setCancelledState(true);
+          } else if (data.type === "audio_ready") {
+            setupAudio(`/api/v1/sos/${SESSION_ID}/audio`, data.sha256);
+          }
+        } catch (e) {
+          console.error("Error parsing radar telemetry:", e);
+        }
+      };
+
+      ws.onclose = () => {
+        console.warn("WebSocket closed. Retrying in 3s...");
+        setTimeout(connectWebSocket, 3000);
+      };
+    }
+
+    // Initial Fetch for Snapshot
+    async function loadInitialSnapshot() {
+      try {
+        const resp = await fetch(`/api/v1/sos/${SESSION_ID}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          document.getElementById("victimNameDisplay").innerText = `${data.user_name} — EMERGENCY RADAR`;
+          if (data.current_location) {
+            updateLocation(data.current_location.lat, data.current_location.lng, data.current_location.speed, data.current_location.accuracy);
+          }
+          if (data.nearest_havens) renderSafeHavens(data.nearest_havens);
+          if (data.emergency_contacts) renderContacts(data.emergency_contacts);
+          if (data.audio_available) setupAudio(`/api/v1/sos/${SESSION_ID}/audio`);
+          if (data.status === "escalated" || data.auto_escalated) setEscalatedState();
+          else if (data.status === "cancelled") setCancelledState(false);
+          else startCountdown(60);
+        }
+      } catch (err) {
+        console.warn("Initial snapshot fetch error:", err);
+      }
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      // Default initial coordinates (Connaught Place, New Delhi)
+      initMap(28.6315, 77.2167);
+      loadInitialSnapshot();
+      connectWebSocket();
+    });
+  </script>
+</body>
+</html>

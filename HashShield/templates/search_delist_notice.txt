@@ -1,0 +1,34 @@
+[TODO: verify legal wording]
+URGENT DE-INDEXING & SEARCH REMOVAL REQUEST
+REGARDING NON-CONSENSUAL INTIMATE IMAGERY (NCII) / PERSONAL PRIVACY INVASION
+
+Date: {{ date_str }}
+Case ID: {{ case_id }}
+To: Search Engine Trust & Safety / Removal Operations
+
+Subject: Request to De-index Web Pages Exhibiting Non-Consensual Explicit or Morphed Imagery
+
+Dear Trust & Safety Team,
+
+1. We request the immediate removal and de-indexing of search results linking to personal non-consensual explicit or morphed imagery.
+
+2. SPECIFIC SEARCH RESULTS / URLs TO DE-INDEX:
+{% for url in urls %}
+   - {{ url }}
+{% endfor %}
+
+3. EVIDENCE & FORENSIC FINGERPRINTS:
+   - SHA-256 Checksum: {{ evidence_sha256 }}
+   - Perceptual Hashes:
+{% for h in evidence_hashes %}
+     * {{ h }}
+{% endfor %}
+
+4. LEGAL & POLICY BASIS:
+   - [TODO: verify legal wording - cite Search Engine Personal Intimate Imagery Removal Policy and Rule 3(2)(b) IT Rules 2021]
+   - The subject has not authorized this distribution, and its presence in search results causes severe ongoing harm and harassment.
+
+5. ACTION REQUESTED:
+   Expeditiously remove the listed URLs from public search query indexes globally.
+
+Generated via Project KAALI — Hash Shield Protocol

@@ -1,0 +1,38 @@
+[TODO: verify legal wording]
+CEASE AND DESIST NOTICE TO HOSTING PROVIDER / REGISTRAR ABUSE DESK
+REGARDING NON-CONSENSUAL INTIMATE IMAGERY (NCII)
+
+Date: {{ date_str }}
+Case ID: {{ case_id }}
+To Abuse Desk / Legal Compliance:
+Hosting Provider / Network: {{ host or "Host Provider" }}
+Registrar: {{ registrar or "Domain Registrar" }}
+Domain: {{ domain }}
+
+Subject: Urgent Takedown Demand — Unlawful Intimate Material Hosted on Network Infrastructure
+
+Dear Abuse Contact,
+
+1. This notice concerns infringing and unlawful material hosted on infrastructure under your administrative or network control.
+
+2. SPECIFIC INFRINGING LOCATIONS:
+{% for url in urls %}
+   - {{ url }}
+{% endfor %}
+
+3. FORENSIC EVIDENCE IDENTIFIERS:
+   - Cryptographic Proof (SHA-256): {{ evidence_sha256 }}
+   - Perceptual Image Fingerprints:
+{% for h in evidence_hashes %}
+     * {{ h }}
+{% endfor %}
+
+4. LEGAL NOTIFICATION:
+   - [TODO: verify legal wording - insert jurisdictional provisions under DMCA Section 512(c) / Section 79 IT Act 2000]
+   - The material was uploaded without the subject's knowledge, permission, or consent.
+   - You are hereby demanded to expeditiously disable access to or terminate the hosting of the specified resources within {{ sla_hours }} hours.
+
+5. PRESERVATION OF RECORDS:
+   In accordance with statutory duties, please preserve all relevant access logs, IP records, timestamped transaction logs, and subscriber account information for inspection by law enforcement agencies.
+
+Generated via Project KAALI — Hash Shield Evidence Protocol
